@@ -20,6 +20,7 @@ The current implementation:
 ```text
 .
 ├── README.md
+├── requirements.txt             # Pinned Python dependencies
 ├── train.sh                     # Batch training script; run from an activated environment
 ├── cityflow_env_wrapper.py      # CityFlow environment, observations, rewards, and metrics
 ├── HALight/
@@ -51,32 +52,53 @@ The current implementation:
 
 ## Environment Setup
 
-Linux is recommended. The previous experimental setup used **Python 3.8.20**. Exact dependency versions and external repository revisions are not included in this release, so the instructions below are a setup outline rather than a fully pinned environment.
+Linux is recommended. The experimental Python version is **3.8.20**. Pinned Python dependencies are provided in [`requirements.txt`](requirements.txt) at the repository root, including:
 
-The training code directly depends on **PyTorch**, **NumPy**, **tqdm**, **CityFlow**, and **HARL**. HARL also installs its own dependencies. `torch_geometric` is needed only when using `utils/set_hete_graph.py`; the main training path does not import that utility.
+| Package | Pinned version |
+| --- | --- |
+| PyTorch | `2.4.1` |
+| NumPy | `1.24.4` |
+| PyTorch Geometric | `2.6.1` |
+| torchvision | `0.19.1` |
+| torchaudio | `2.4.1` |
+| tqdm | `4.67.1` |
 
-1. Create and activate an environment:
+The requirements also contain NVIDIA CUDA 12 runtime packages and Triton, reflecting a Linux NVIDIA GPU environment. Use a compatible machine for this dependency set. For macOS or CPU-only installations, prepare a platform-appropriate dependency file rather than installing the CUDA-specific list unchanged. At runtime, HALight automatically selects CUDA when available, otherwise CPU.
 
-   ```bash
-   conda create -n Cityflow python=3.8.20
-   conda activate Cityflow
-   ```
+### 1. Create the Python Environment
 
-2. Install a PyTorch version compatible with your Python version and CUDA/CPU environment. Install NumPy and tqdm in the same environment:
+```bash
+conda create -n Cityflow python=3.8.20
+conda activate Cityflow
+```
 
-   ```bash
-   python -m pip install numpy tqdm
-   ```
+### 2. Install the Python Dependencies
 
-3. Install [CityFlow](https://cityflow.readthedocs.io/en/latest/install.html), including its native build dependencies. Install [HARL](https://github.com/PKU-MARL/HARL#installation) according to its official instructions. Keep external source checkouts outside this repository.
+From the repository root, run:
 
-4. Verify the imports:
+```bash
+python -m pip install -r requirements.txt
+```
 
-   ```bash
-   python -c "import torch, numpy, tqdm, cityflow; from harl.common.valuenorm import ValueNorm; print('Imports OK'); print('CUDA:', torch.cuda.is_available())"
-   ```
+`torch-geometric` is included in the requirements for the heterogeneous-graph utility in `utils/set_hete_graph.py`; the main training path does not import that utility.
 
-The code automatically selects CUDA when available, otherwise CPU. A `requirements.txt` was not supplied with the current code; export the actual working environment if you need exact reproducibility.
+### 3. Install CityFlow and HARL
+
+**CityFlow and HARL are required by the training code but are not listed in `requirements.txt`. Install them separately in the same environment.**
+
+- Follow the [CityFlow installation guide](https://cityflow.readthedocs.io/en/latest/install.html), including its native build dependencies.
+- Follow the [HARL installation instructions](https://github.com/PKU-MARL/HARL#installation).
+
+Keep external source checkouts outside this repository. Record the CityFlow and HARL commit IDs used for your experiments; these revisions are not specified by the requirements file.
+
+### 4. Verify the Environment
+
+```bash
+python -m pip check
+python -c "import torch, numpy, tqdm, cityflow; from harl.common.valuenorm import ValueNorm; print('Imports OK'); print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available())"
+```
+
+These checks help detect dependency conflicts and missing imports before training. The supplied requirements have not been verified through a fresh installation as part of this documentation update. If installation reports Python-version or dependency conflicts, reconcile the package pins with the working experimental environment before running experiments.
 
 ## Datasets
 
