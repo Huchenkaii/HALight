@@ -11,25 +11,32 @@ class Intersection:
         self.id = config['id']
         self.enter_roads = set()
         self.leave_roads = set()
-        self.movement = {}
-        self.enter_lanes = {}
+        self.movement = {}  # key: 唯一in_lane_id, value: 唯一out_lane_id
+        self.enter_lanes = {}  # key: leave_road_id, value: list of 唯一in_lane_id
 
+        # 遍历每个roadlink（对应一种运动类型，如左转、直行）
         for roadlink in config.get("roadLinks", []):
             start_road = roadlink["startRoad"]
             end_road = roadlink["endRoad"]
             self.enter_roads.add(start_road)
             self.leave_roads.add(end_road)
 
+            # 关键：遍历该roadlink下的所有laneLink，提取真实车道索引startLaneIndex
             for lane_link in roadlink.get("laneLinks", []):
+                # 从laneLink中获取真实的"起始车道索引"（如0、1、2，对应同方向的不同车道）
                 start_lane_idx = lane_link["startLaneIndex"]
+                # 从laneLink中获取真实的"结束车道索引"
                 end_lane_idx = lane_link["endLaneIndex"]
 
+                # 生成唯一的车道ID：roadID_真实车道索引（与Cityflow的车道ID格式完全一致）
                 in_lane = f"{start_road}_{start_lane_idx}"
                 out_lane = f"{end_road}_{end_lane_idx}"
 
+                # 避免重复添加（同一车道可能在laneLinks中重复出现）
                 if in_lane not in self.movement:
                     self.movement[in_lane] = out_lane
 
+                # 构建enter_lanes映射（同一leave_road对应多个in_lane）
                 if end_road not in self.enter_lanes:
                     self.enter_lanes[end_road] = []
                 if in_lane not in self.enter_lanes[end_road]:
@@ -37,32 +44,37 @@ class Intersection:
 
         self.enter_roads = list(self.enter_roads)
         self.leave_roads = list(self.leave_roads)
+        # 打印真实车道数，验证异构差异（如A路口10个车道、B路口5个车道）
+        # print(self.movement)
 
 
 
 class CityflowEnvWrapper:
     """
-    cityflow heterogenous environment
+    cityflow environment demo
+    phase cycle: 1->3->2->4 with all stop phase 0 between consecutive phase
     """
-    def __init__(self, args):
+
+    def __init__(self, args,flow,env_seed=0):
         self.args = args
-        np.random.seed(self.args.seed)
+        np.random.seed(env_seed)
         self.delta_time = args.delta_time
         self.obs_drop_prob = args.obs_drop_prob
-        self.obs_drop_mask_dict = {}
+        self.obs_drop_mask_dict = {}  # 每个路口固定的缺失掩码
         self.lane_sum = 0
 
-        self.speed_threshold = 1.39
-        self.vehicle_waiting_time = {}
+        self.speed_threshold = 1.39  # 判断排队的速度阈值
+        self.vehicle_waiting_time = {}  # 存储每辆车的排队时间字典
+        self.flow = flow
 
 
         cityflow_config = {
             "interval": 1,
-            "seed": self.args.seed,
+            "seed": env_seed,
             "laneChange": False,
             "dir": args.dir,
             "roadnetFile": self.args.net,
-            "flowFile": self.args.flow,
+            "flowFile": self.flow,
             "rlTrafficLight": True,
             "saveReplay": False,
             "roadnetLogFile": "./replay/roadnetLogFile.json",
@@ -116,6 +128,7 @@ class CityflowEnvWrapper:
 
         for inter in self.intersections.values():
             self.lane_sum += len(inter.movement.keys())
+        # print("self.lane_sum", self.lane_sum)
 
     def step(self, actions):
         additional_log = {"pressure": {key: 0 for key in self.intersection_ids},
@@ -135,23 +148,29 @@ class CityflowEnvWrapper:
                 raise Exception("Unknown action type")
 
         for _ in range(self.delta_time):
-            self.eng.next_step()
-            self._update_enter_leave_time()
+            self.eng.next_step()  # 执行一个模拟步骤
+            self._update_enter_leave_time()  # 更新车辆的进入和离开时间
 
+            # 获取所有车辆的速度（一次性获取所有车辆的速度）
             vehicle_speeds = self.eng.get_vehicle_speed()
 
-            vehicles = self.eng.get_vehicles()
+            # 更新每辆车的排队时间
+            vehicles = self.eng.get_vehicles()  # 获取当前所有的车辆ID
             for vehicle_id in vehicles:
+                # 获取车辆的速度（单位：km/h）从预先存储的字典中获取
                 vehicle_speed = vehicle_speeds.get(vehicle_id, 0)
 
+                # 如果车辆的速度小于阈值，认为它在排队
                 if vehicle_speed < self.speed_threshold:
+                    # 更新排队时间字典
                     if vehicle_id in self.vehicle_waiting_time:
-                        self.vehicle_waiting_time[vehicle_id] += 1
+                        self.vehicle_waiting_time[vehicle_id] += 1  # 每步累加1秒的排队时间
                     else:
-                        self.vehicle_waiting_time[vehicle_id] = 1
+                        self.vehicle_waiting_time[vehicle_id] = 1  # 如果是第一次记录该车，初始化排队时间为1秒
 
         state = self._get_state()
         reward = self._get_reward()
+        # print(sum(reward.values()))
         if self.eng.get_vehicle_count() == 0:
             done = True
         return state, reward, done, additional_log
@@ -261,18 +280,24 @@ class CityflowEnvWrapper:
         self.current_phases = {iid: 0 for iid in self.intersection_ids}
         self.vehicle_enter_leave_dict = dict()
         self.previous_vehicles_list = {}
-        self.vehicle_waiting_time = {}
+        self.vehicle_waiting_time = {}  # 存储每辆车的排队时间字典
 
 
         self.obs_drop_mask_dict = {}
         for inter_id in self.intersection_ids:
             intersection = self.intersections[inter_id]
-            num_in_lanes = len(intersection.movement.keys())
+            num_in_lanes = len(intersection.movement.keys())  # 车道数量
 
-            lane_mask = np.random.rand(num_in_lanes) < self.obs_drop_prob
+            # 核心修正：为每个车道生成1个mask（是否缺失），长度=num_in_lanes
+            lane_mask = np.random.rand(num_in_lanes) < self.obs_drop_prob  # 每个车道：True=缺失，False=不缺失
 
-            mask = np.concatenate([lane_mask, lane_mask])
+            # 将车道mask重复一次：前num_in_lanes对应queue，后num_in_lanes对应wave（保证同一车道的queue和wave同时缺失）
+            # 总长度=num_in_lanes*2（对应state_dim-1，因为phase不缺失）
+            mask = np.concatenate([lane_mask, lane_mask])  # 例如：lane_mask=[T,F] → mask=[T,F,T,F]
+
+            # 存储该路口的mask（此时mask已保证queue和wave的车道级缺失一致）
             self.obs_drop_mask_dict[inter_id] = mask
+            # print(inter_id,self.obs_drop_mask_dict[inter_id])
 
         init_states = {}
         for inter_id in self.intersection_ids:
@@ -296,11 +321,16 @@ class CityflowEnvWrapper:
         return self.intersection_ids
 
     def get_average_queue_time(self):
+        """
+        计算已离开路网的车辆的平均排队时间（单位：秒）。
+        只统计 leave_time 不为 None 的车辆。
+        """
         total_queue_time = 0.0
         finished_vehicle_count = 0
 
         for vid, info in self.vehicle_enter_leave_dict.items():
             if info["leave_time"] is not None:
+                # 只统计已离开的车辆
                 if vid in self.vehicle_waiting_time:
                     total_queue_time += self.vehicle_waiting_time[vid]
                     finished_vehicle_count += 1

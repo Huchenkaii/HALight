@@ -7,8 +7,9 @@ class RNNLayer(nn.Module):
         super(RNNLayer, self).__init__()
         self.rnn = nn.GRU(inputs_dim, outputs_dim, num_layers=1)
         self.outputs_dim = outputs_dim
-        self.episode_length = episode_length
+        self.episode_length = episode_length  # ✅ 新增参数
 
+        # 初始化
         for name, param in self.rnn.named_parameters():
             if "bias" in name:
                 nn.init.constant_(param, 0)
@@ -27,15 +28,19 @@ class RNNLayer(nn.Module):
         T = x_rows // N
         assert T >= 1, f"T must be ≥1, got {T}"
 
+        # === 自动生成 masks ===
         if masks is None:
             if T == 1:
                 masks = torch.ones(N, dtype=torch.float32, device=hxs.device)
             else:
                 masks = torch.ones(T, N, dtype=torch.float32, device=hxs.device)
 
+                # ✅ 如果长度等于 episode_length，自动把最后一位置 0
                 if self.episode_length is not None and T == self.episode_length:
                     masks[-1] = 0.0  # 自动截断
+                    # （也可以同步设置 bad_mask，这里一般由外部GAE控制）
 
+        # === 下面保持原逻辑 ===
         if T == 1:
             masked_hxs = hxs * masks.unsqueeze(-1)
             masked_hxs_3d = masked_hxs.unsqueeze(0)
