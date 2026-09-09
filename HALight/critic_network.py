@@ -1,3 +1,4 @@
+"""Critic."""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,16 +51,6 @@ class Critic:
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        if "high" in args.flow:
-            flow = "high"
-        else:
-            flow = "low"
-        if "4x4" in args.net:
-            net = "4x4"
-        else:
-            net = "3x3"
-        self.log_file = "./HALight_RNN_" + net + "_" + str(args.obs_drop_prob) + "_" + flow + "_" + "value_loss_log.txt"
-
         self.clip_param = args.clip_param
         self.critic_epoch = args.critic_epoch
         self.critic_num_mini_batch = args.critic_num_mini_batch
@@ -96,6 +87,7 @@ class Critic:
         Args:
             cent_obs: (np.ndarray) centralized input to the critic.
             rnn_states_critic: (np.ndarray) if critic is RNN, RNN states for critic.
+            masks: (np.ndarray) denotes points at which RNN states should be reset.
         Returns:
             values: (torch.Tensor) value function predictions.
             rnn_states_critic: (torch.Tensor) updated critic network RNN states.
@@ -144,13 +136,6 @@ class Critic:
 
         value_loss = value_loss.mean()
 
-        if not hasattr(self, "value_loss_log_step"):
-            self.value_loss_log_step = 0
-
-        with open(self.log_file, "a") as f:
-            f.write(f"{self.value_loss_log_step}\t{value_loss.item():.6f}\n")
-
-        self.value_loss_log_step += 1
 
         return value_loss
 
@@ -195,6 +180,13 @@ class Critic:
         return value_loss, critic_grad_norm
 
     def train(self, critic_buffer, value_normalizer=None):
+        """Perform a training update using minibatch GD.
+        Args:
+            critic_buffer: (OnPolicyCriticBufferEP or OnPolicyCriticBufferFP) buffer containing training data related to critic.
+            value_normalizer: (ValueNorm) normalize the rewards, denormalize critic outputs.
+        Returns:
+            train_info: (dict) contains information regarding training update (e.g. loss, grad norms, etc).
+        """
         for _ in range(self.critic_epoch):
             data_generator = critic_buffer.naive_recurrent_generator_critic(self.critic_num_mini_batch)
 

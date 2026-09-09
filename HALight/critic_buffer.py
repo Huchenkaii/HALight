@@ -1,3 +1,4 @@
+"""On-policy buffer for critic that uses Environment-Provided (EP) state."""
 import torch
 import numpy as np
 from harl.utils.envs_tools import get_shape_from_obs_space
@@ -8,6 +9,11 @@ class OnPolicyCriticBufferEP:
     """On-policy buffer for critic that uses Environment-Provided (EP) state."""
 
     def __init__(self, args, share_obs_size):
+        """Initialize on-policy critic buffer.
+        Args:
+            args: (dict) arguments
+            share_obs_space: (gym.Space or list) share observation space
+        """
         self.episode_length = args.episode_length
         self.hidden_sizes = args.hidden_sizes
         self.gamma = args.gamma
@@ -52,6 +58,7 @@ class OnPolicyCriticBufferEP:
             (self.episode_length + 1, 1), dtype=np.float32
         )
 
+        # Buffer for bad masks indicating truncation and termination. If 0, trunction; if 1 and masks is 0, termination; else, not done yet.
         self.bad_masks = np.ones_like(self.masks)
 
         self.masks[-1] = 0
@@ -64,6 +71,7 @@ class OnPolicyCriticBufferEP:
     ):
         """Insert data into buffer."""
         self.rewards[self.step] = rewards.copy()
+
         self.step = (self.step + 1) % self.episode_length
 
     def after_update(self):
@@ -76,10 +84,12 @@ class OnPolicyCriticBufferEP:
         return np.mean(self.rewards)
 
     def reset_rnn_states(self):
+        """清空critic的RNN隐藏状态，重置为全零初始状态（每个新episode调用）"""
         self.rnn_states_critic = np.zeros(
             (self.episode_length + 1, self.rnn_hidden_size),
             dtype=np.float32
         )
+        # 可选：返回重置后的初始状态（用于验证）
         return self.rnn_states_critic[0]
 
     def compute_returns(self, next_value, value_normalizer=None):
@@ -188,12 +198,25 @@ class OnPolicyCriticBufferEP:
                     )
 
     def naive_recurrent_generator_critic(self, critic_num_mini_batch=1):
-        T = self.episode_length
+        """Training data generator for critic that uses RNN network.
+        This generator does not split the trajectories into chunks.
+        (适配TSC环境：n_rollout_threads=1, 无recurrent_n维度，rnn_states_critic形状为(episode_length + 1, rnn_hidden_size))
+        Args:
+            critic_num_mini_batch: (int) 固定为1（单环境无需多batch）
+        """
 
+        T = self.episode_length  # 轨迹长度（如360步）
+
+        # 处理核心数据（无环境维度，直接按时序提取）
+        # share_obs形状：(T+1, obs_dim) → 取前T步 → (T, obs_dim)
         share_obs_batch = self.share_obs[:-1].reshape(T, -1)
+        # value_preds/returns/masks形状：(T+1,) → 取前T步 → (T, 1)
         value_preds_batch = self.value_preds[:-1].reshape(T, 1)
         return_batch = self.returns[:-1].reshape(T, 1)
 
-        rnn_states_critic_batch = self.rnn_states_critic[0]
+        # RNN初始状态：直接取第0步的隐藏状态（形状为(rnn_hidden_size,)）
+        # 匹配self.rnn_states_critic的维度：(T+1, rnn_hidden_size)
+        rnn_states_critic_batch = self.rnn_states_critic[0]  # 无环境维度和recurrent_n维度
 
+        # 返回单batch数据
         yield share_obs_batch, rnn_states_critic_batch, value_preds_batch, return_batch

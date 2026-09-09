@@ -47,6 +47,7 @@ class Agent:
         factor_batch = check(factor_batch).to(self.device)
 
 
+        # Reshape to do evaluations for all steps in a single forward pass
         action_log_probs, dist_entropy, _ = self.policy_network.evaluate_actions(states_batch,rnn_states_batch,neigh_prev_info_batch_dict,neigh_h_batch_dict,action=actions_batch)
 
         # actor update
@@ -62,7 +63,11 @@ class Agent:
 
         (policy_loss - dist_entropy * self.entropy_coef).backward()  # add entropy term
 
+        # actor_grad_norm = nn.utils.clip_grad_norm_(self.policy_network.parameters(), 10)
+
         self.actor_optimizer.step()
+
+        # return policy_loss, dist_entropy, actor_grad_norm, imp_weights
 
     def train(self, actor_buffer,neigh_prev_info_ep,neigh_h_ep):
         advantages_copy = actor_buffer.advantage.copy()
